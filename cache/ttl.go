@@ -15,7 +15,7 @@ func StartColdCacheCleanup(c *Cache, interval time.Duration, threshold float64, 
 			case <-c.ctx.Done():
 				return
 			case <-ticker.C:
-				for _, shard := range c.coldShards {
+				for _, shard := range c.ColdShards {
 					repeats := 0
 					for repeats < maxRepeats {
 						expiredFraction := cleanupShard(shard)

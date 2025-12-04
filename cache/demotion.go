@@ -16,7 +16,7 @@ func StartHotDemotion(c *Cache) {
 				return
 			case <-ticker.C:
 				totalKeys := 1
-				for _, shard := range c.hotShards {
+				for _, shard := range c.HotShards {
 					shard.lock.RLock()
 					totalKeys += shard.keyCount
 					shard.lock.RUnlock()
@@ -29,9 +29,7 @@ func StartHotDemotion(c *Cache) {
 				c.hotThresholdUpdated = time.Now()
 				threshold := c.hotThreshold
 
-				for _, shard := range c.hotShards {
-					shard.lock.Lock()
-
+				for _, shard := range c.HotShards {
 					sampleSize := shard.keyCount / 20
 					if sampleSize < 5 {
 						sampleSize = 5
@@ -42,6 +40,7 @@ func StartHotDemotion(c *Cache) {
 
 					//TODO: run goroutine for demotion
 					keys := shard.SampleKeysUnique(sampleSize)
+					shard.lock.Lock()
 					for _, key := range keys {
 						entry, ok := shard.items[key]
 						if !ok {

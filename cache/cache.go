@@ -7,8 +7,8 @@ import (
 )
 
 type Cache struct {
-	hotShards  []*CacheShard
-	coldShards []*CacheShard
+	HotShards  []*CacheShard
+	ColdShards []*CacheShard
 
 	hotShardCount  int
 	coldShardCount int
@@ -29,23 +29,23 @@ func NewCache(defaultTTL time.Duration, hotShardCount, coldShardCount int, hotRe
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := &Cache{
-		hotShards:         make([]*CacheShard, hotShardCount),
-		coldShards:        make([]*CacheShard, coldShardCount),
+		HotShards:         make([]*CacheShard, hotShardCount),
+		ColdShards:        make([]*CacheShard, coldShardCount),
 		hotShardCount:     hotShardCount,
 		coldShardCount:    coldShardCount,
 		defaultTTL:        defaultTTL,
 		cms:               NewCountMinSketch(4, 50000),
 		hotReadPercentage: hotReadPercentage,
-		hotThresholdTTL:   500 * time.Millisecond,
+		hotThresholdTTL:   2000 * time.Millisecond,
 		ctx:               ctx,
 		cancel:            cancel,
 	}
 
 	for i := 0; i < hotShardCount; i++ {
-		c.hotShards[i] = NewCacheShard()
+		c.HotShards[i] = NewCacheShard()
 	}
 	for i := 0; i < coldShardCount; i++ {
-		c.coldShards[i] = NewCacheShard()
+		c.ColdShards[i] = NewCacheShard()
 	}
 
 	StartColdCacheCleanup(c, 100*time.Millisecond, 0.25, 5)
@@ -75,20 +75,20 @@ func (c *Cache) Set(key string, value interface{}, ttl ...time.Duration) {
 		Expiration: expiration,
 	}
 
-	hotShard := c.hotShards[getShardIndex(key, c.hotShardCount)]
+	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
 	if _, ok := hotShard.Get(key); ok {
 		hotShard.Set(key, entry)
 		return
 	}
 
-	coldShard := c.coldShards[getShardIndex(key, c.coldShardCount)]
+	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
 	coldShard.Set(key, entry)
 }
 
 func (c *Cache) Get(key string) (interface{}, bool) {
 	c.cms.Add(key)
 
-	hotShard := c.hotShards[getShardIndex(key, c.hotShardCount)]
+	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
 	if entry, ok := hotShard.Get(key); ok {
 		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
 			hotShard.Delete(key)
@@ -99,7 +99,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 		return entry.Value, true
 	}
 
-	coldShard := c.coldShards[getShardIndex(key, c.coldShardCount)]
+	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
 	if entry, ok := coldShard.Get(key); ok {
 		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
 			coldShard.Delete(key)
@@ -107,7 +107,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 			return nil, false
 		}
 
-		if c.isHotKey(key) {
+		if c.IsHotKey(key) {
 			c.promoteColdKey(key, entry)
 		}
 
@@ -118,31 +118,31 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 }
 
 func (c *Cache) Delete(key string) {
-	hotShard := c.hotShards[getShardIndex(key, c.hotShardCount)]
+	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
 	hotShard.Delete(key)
 
-	coldShard := c.coldShards[getShardIndex(key, c.coldShardCount)]
+	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
 	coldShard.Delete(key)
 
 	c.cms.Reset(key)
 }
 
-func (c *Cache) isHotKey(key string) bool {
+func (c *Cache) IsHotKey(key string) bool {
 	count := c.cms.Count(key)
 	return count >= c.hotThreshold
 }
 
 func (c *Cache) promoteColdKey(key string, entry *Entry) {
-	coldShard := c.coldShards[getShardIndex(key, c.coldShardCount)]
-	hotShard := c.hotShards[getShardIndex(key, c.hotShardCount)]
+	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
+	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
 
 	hotShard.Set(key, entry)
 	coldShard.Delete(key)
 }
 
 func (c *Cache) demoteHotKey(key string, entry *Entry) {
-	hotShard := c.hotShards[getShardIndex(key, c.hotShardCount)]
-	coldShard := c.coldShards[getShardIndex(key, c.coldShardCount)]
+	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
+	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
 
 	coldShard.Set(key, entry)
 	hotShard.Delete(key)
