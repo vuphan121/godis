@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	cfgpkg "github.com/vuphan121/godis/config"
 	"hash/fnv"
 	"time"
 )
@@ -25,31 +26,49 @@ type Cache struct {
 	cancel context.CancelFunc
 }
 
-func NewCache(defaultTTL time.Duration, hotShardCount, coldShardCount int, hotReadPercentage float64) *Cache {
+func NewCache(opts ...cfgpkg.Option) *Cache {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	cfg := cfgpkg.DefaultConfig()
+
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	c := &Cache{
-		HotShards:         make([]*CacheShard, hotShardCount),
-		ColdShards:        make([]*CacheShard, coldShardCount),
-		hotShardCount:     hotShardCount,
-		coldShardCount:    coldShardCount,
-		defaultTTL:        defaultTTL,
-		cms:               NewCountMinSketch(4, 50000),
-		hotReadPercentage: hotReadPercentage,
-		hotThresholdTTL:   2000 * time.Millisecond,
+		HotShards:         make([]*CacheShard, cfg.HotShardCount),
+		ColdShards:        make([]*CacheShard, cfg.ColdShardCount),
+		hotShardCount:     cfg.HotShardCount,
+		coldShardCount:    cfg.ColdShardCount,
+		defaultTTL:        cfg.DefaultTTL,
+		cms:               NewCountMinSketch(cfg.CMSDepth, cfg.CMSWidth),
+		hotReadPercentage: cfg.HotReadPercentage,
+		hotThresholdTTL:   cfg.HotThresholdTTL,
 		ctx:               ctx,
 		cancel:            cancel,
 	}
 
-	for i := 0; i < hotShardCount; i++ {
+	for i := 0; i < cfg.HotShardCount; i++ {
 		c.HotShards[i] = NewCacheShard()
 	}
-	for i := 0; i < coldShardCount; i++ {
+	for i := 0; i < cfg.ColdShardCount; i++ {
 		c.ColdShards[i] = NewCacheShard()
 	}
 
-	StartColdCacheCleanup(c, 100*time.Millisecond, 0.25, 5)
-	StartHotDemotion(c)
+	StartColdCacheCleanup(
+		c,
+		cfg.ColdCleanupInterval,
+		cfg.ColdCleanupPercent,
+		cfg.ColdCleanupMinSample,
+	)
+
+	StartHotDemotion(
+		c,
+		cfg.HotDemotionInterval,
+		cfg.HotDemotionPercent,
+		cfg.HotDemotionMinSample,
+		cfg.HotDemotionMaxSample,
+	)
 
 	return c
 }

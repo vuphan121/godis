@@ -5,15 +5,16 @@ import (
 	"time"
 )
 
-func StartHotDemotion(c *Cache) {
+func StartHotDemotion(c *Cache, interval time.Duration, samplePercent float64, minSample int, maxSample int) {
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-c.ctx.Done():
 				return
+
 			case <-ticker.C:
 				totalKeys := 1
 				for _, shard := range c.HotShards {
@@ -30,24 +31,29 @@ func StartHotDemotion(c *Cache) {
 				threshold := c.hotThreshold
 
 				for _, shard := range c.HotShards {
-					sampleSize := shard.keyCount / 20
-					if sampleSize < 5 {
-						sampleSize = 5
+					sampleSize := int(float64(shard.keyCount) * samplePercent)
+					if sampleSize < minSample {
+						sampleSize = minSample
 					}
-					if sampleSize > 1000 {
-						sampleSize = 1000
+					if sampleSize > maxSample {
+						sampleSize = maxSample
 					}
 
-					//TODO: run goroutine for demotion
 					keys := shard.SampleKeysUnique(sampleSize)
+
 					shard.lock.Lock()
 					for _, key := range keys {
 						entry, ok := shard.items[key]
 						if !ok {
 							continue
 						}
+
 						count := c.cms.Count(key)
-						if count < threshold || (!entry.Expiration.IsZero() && time.Now().After(entry.Expiration)) {
+
+						isCold := count < threshold
+						isExpired := !entry.Expiration.IsZero() && time.Now().After(entry.Expiration)
+
+						if isCold || isExpired {
 							c.demoteHotKey(key, entry)
 						}
 					}
@@ -72,7 +78,6 @@ func (s *CacheShard) SampleKeysUnique(n int) []string {
 		return keys
 	}
 
-	// Reservoir sampling
 	reservoir := make([]string, 0, n)
 	i := 0
 	for k := range s.items {
