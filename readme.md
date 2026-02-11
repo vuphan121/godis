@@ -10,7 +10,6 @@
   <img src="https://img.shields.io/badge/status-Experimental-yellow" />
 </p>
 
----
 
 <p align="center">
   <strong>Table of Contents</strong><br/>
@@ -21,15 +20,12 @@
   <a href="#running-the-project">Running the Project</a>
 </p>
 
----
-
 ## About The Project
 
-`godis` is an experimental in-memory cache library written in Go, built for learning and exploration.  
-- Focuses on understanding how modern cache systems manage frequently accessed data, balance performance trade-offs, and maintain efficiency under load.  
+`godis` is an experimental in-memory cache library written in Go, built for learning and exploration.
+- Focuses on understanding how modern cache systems manage frequently accessed data, balance performance trade-offs, and maintain efficiency under load.
 - Prioritizes clarity and experimentation over production readiness, serving as a hands-on way to study cache internals.
 
----
 
 ## High-level Design
 
@@ -46,28 +42,14 @@ Core ideas:
 
 This separation allows the cache to prioritize memory and CPU resources for frequently used data while keeping overall maintenance lightweight.
 
----
 
 ## Deep Dives & Design Docs
 
-Detailed design discussions live in Notion documents to keep this repository focused and readable.
+More detailed design in these docs. 
 
-- **Low-level cache design & data structures**  
-  → _Notion doc link_
+🔗 [Low-level design](https://www.notion.so/Godis-low-level-design-30005c0ca4468048ac33fbcc5417f004?source=copy_link)
 
-- **Hot / cold tiering strategy**  
-  → _Notion doc link_
-
-- **Count-Min Sketch & frequency estimation**  
-  → _Notion doc link_
-
-- **Sampling-based eviction & maintenance**  
-  → _Notion doc link_
-
-- **Comparison with other cache systems (Redis, LRU, LFU, etc.)**  
-  → _Notion doc link_
-
----
+🔗 [Simple analysis of common caching systems](https://www.notion.so/Simple-analysis-of-common-caching-systems-30405c0ca4468042b295f064e33f6a46?source=copy_link)
 
 ## Configuration
 
