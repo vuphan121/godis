@@ -6,7 +6,21 @@ This file records user-visible changes for each tagged release.
 
 ### Added
 
-- Reserved for changes made after `v0.1.0`.
+- Reserved for changes made after `v0.1.1`.
+
+## 0.1.1 - 2026-09-18
+
+### Added
+
+- Deterministic concurrent-history coverage for TTL expiration and capacity-one eviction.
+- Concurrent maintenance stress coverage for promotion, demotion, expiration, mutation, and bounded-size invariants.
+- A parallel frequency-update benchmark for regression tracking.
+
+### Changed
+
+- Count-Min Sketch updates use 256 lock stripes per row instead of one sketch-wide write lock.
+- Internal time reads are injectable so expiration histories can be verified without wall-clock timing.
+- The README now presents the generic facade, current defaults, architecture, verification workflow, and agent-guide handoff accurately.
 
 ## 0.1.0 - 2026-09-18
 

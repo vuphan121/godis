@@ -44,6 +44,7 @@ type Cache struct {
 	done      chan struct{}
 
 	metrics cacheMetrics
+	now     func() time.Time
 }
 
 func NewCache(options ...config.Option) (*Cache, error) {
@@ -78,6 +79,7 @@ func NewCache(options ...config.Option) (*Cache, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		done:              make(chan struct{}),
+		now:               time.Now,
 	}
 	c.hotThreshold.Store(uint64(cfg.HotMinHits))
 	for index := range c.hotShards {
@@ -112,7 +114,7 @@ func (c *Cache) Set(key string, value any, ttl ...time.Duration) error {
 	if duration < 0 {
 		return ErrInvalidTTL
 	}
-	now := time.Now()
+	now := c.now()
 	item := &entry{value: value, createdAt: now}
 	if duration > 0 {
 		item.expiration = now.Add(duration)
@@ -163,7 +165,7 @@ func (c *Cache) Get(key string) (any, bool) {
 	if c.closed.Load() {
 		return nil, false
 	}
-	now := time.Now()
+	now := c.now()
 	c.tierMu.RLock()
 	if item, ok := c.hotShard(key).get(key); ok {
 		if item.expired(now) {

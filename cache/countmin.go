@@ -10,14 +10,18 @@ import (
 	"sync"
 )
 
-const maxCMSCells = 10_000_000
+const (
+	maxCMSCells      = 10_000_000
+	cmsStripesPerRow = 256
+)
 
 type CountMinSketch struct {
-	mu         sync.RWMutex
-	depth      int
-	width      int
-	generation uint64
-	table      [][]counterCell
+	generationMu sync.RWMutex
+	depth        int
+	width        int
+	generation   uint64
+	table        [][]counterCell
+	stripes      []sync.RWMutex
 }
 
 type counterCell struct {
@@ -36,32 +40,40 @@ func NewCountMinSketch(depth, width int) (*CountMinSketch, error) {
 	for index := range table {
 		table[index] = make([]counterCell, width)
 	}
-	return &CountMinSketch{depth: depth, width: width, table: table}, nil
+	return &CountMinSketch{
+		depth:   depth,
+		width:   width,
+		table:   table,
+		stripes: make([]sync.RWMutex, depth*cmsStripesPerRow),
+	}, nil
 }
 
 func (cms *CountMinSketch) Add(key string) {
-	cms.mu.Lock()
-	defer cms.mu.Unlock()
+	cms.generationMu.RLock()
+	defer cms.generationMu.RUnlock()
 	for row := 0; row < cms.depth; row++ {
 		index := cms.hash(key, uint(row)) % uint(cms.width)
+		stripe := cms.stripe(row, index)
+		stripe.Lock()
 		cell := &cms.table[row][index]
 		cell.value = agedValue(*cell, cms.generation)
 		cell.generation = cms.generation
 		if cell.value < ^uint(0) {
 			cell.value++
 		}
+		stripe.Unlock()
 	}
 }
 
 func (cms *CountMinSketch) Count(key string) uint {
-	cms.mu.RLock()
-	defer cms.mu.RUnlock()
-	return cms.countLocked(key)
+	cms.generationMu.RLock()
+	defer cms.generationMu.RUnlock()
+	return cms.countAtGeneration(key, cms.generation)
 }
 
 func (cms *CountMinSketch) Decay() {
-	cms.mu.Lock()
-	defer cms.mu.Unlock()
+	cms.generationMu.Lock()
+	defer cms.generationMu.Unlock()
 	if cms.generation != ^uint64(0) {
 		cms.generation++
 		return
@@ -80,12 +92,12 @@ func (cms *CountMinSketch) TopThreshold(keys []string, fraction float64, minHits
 	if len(keys) == 0 {
 		return minHits
 	}
-	cms.mu.RLock()
+	cms.generationMu.RLock()
 	counts := make([]uint, 0, len(keys))
 	for _, key := range keys {
-		counts = append(counts, cms.countLocked(key))
+		counts = append(counts, cms.countAtGeneration(key, cms.generation))
 	}
-	cms.mu.RUnlock()
+	cms.generationMu.RUnlock()
 
 	sort.Slice(counts, func(i, j int) bool { return counts[i] > counts[j] })
 	index := int(math.Ceil(float64(len(counts))*fraction)) - 1
@@ -101,15 +113,23 @@ func (cms *CountMinSketch) TopThreshold(keys []string, fraction float64, minHits
 	return counts[index]
 }
 
-func (cms *CountMinSketch) countLocked(key string) uint {
+func (cms *CountMinSketch) countAtGeneration(key string, generation uint64) uint {
 	minimum := ^uint(0)
 	for row := 0; row < cms.depth; row++ {
 		index := cms.hash(key, uint(row)) % uint(cms.width)
-		if value := agedValue(cms.table[row][index], cms.generation); value < minimum {
+		stripe := cms.stripe(row, index)
+		stripe.RLock()
+		value := agedValue(cms.table[row][index], generation)
+		stripe.RUnlock()
+		if value < minimum {
 			minimum = value
 		}
 	}
 	return minimum
+}
+
+func (cms *CountMinSketch) stripe(row int, index uint) *sync.RWMutex {
+	return &cms.stripes[row*cmsStripesPerRow+int(index%cmsStripesPerRow)]
 }
 
 func agedValue(cell counterCell, generation uint64) uint {

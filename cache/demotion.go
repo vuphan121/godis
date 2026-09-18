@@ -24,7 +24,7 @@ func (c *Cache) startHotDemotion(cfg config.Config) {
 }
 
 func (c *Cache) maintainHot(percentage float64, minSample, maxSample int) {
-	now := time.Now()
+	now := c.now()
 	c.tierMu.Lock()
 	defer c.tierMu.Unlock()
 

@@ -125,6 +125,21 @@ func BenchmarkCountMinEagerDecayReference(b *testing.B) {
 	}
 }
 
+func BenchmarkCountMinParallelAdd(b *testing.B) {
+	sketch, err := NewCountMinSketch(4, 50_000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var sequence atomic.Uint64
+	b.ResetTimer()
+	b.RunParallel(func(parallel *testing.PB) {
+		for parallel.Next() {
+			value := sequence.Add(1)
+			sketch.Add(strconv.FormatUint(value%4_096, 10))
+		}
+	})
+}
+
 func BenchmarkCacheWriteChurn(b *testing.B) {
 	cache, err := NewCache(
 		config.WithCapacity(1_000, 32),

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vuphan121/godis/actions/workflows/ci.yml/badge.svg)](https://github.com/vuphan121/godis/actions/workflows/ci.yml)
 
-`godis` is an experimental, bounded in-memory cache library for Go. It explores sharding, hot/cold tiering, approximate frequency tracking, TTL expiration, sampled eviction, and background maintenance.
+`godis` is an experimental, bounded in-memory cache library for Go. It combines sharded hot/cold tiers, approximate frequency tracking, TTL expiration, sampled eviction, and background maintenance behind concurrent untyped and generic APIs.
 
 The project is suitable for learning and experimentation. It has automated correctness and race tests, but it has not yet been proven under production workloads.
 
@@ -34,7 +34,6 @@ func main() {
 	c, err := cache.NewCache(
 		config.WithCapacity(10_000, 32),
 		config.WithDefaultTTL(5*time.Minute),
-		config.WithShardCounts(8, 8),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -53,13 +52,28 @@ func main() {
 
 `NewCache` validates the final configuration and returns an error for unsafe values. Every created cache starts maintenance goroutines, so callers must call `Close`. Closing is idempotent.
 
+For compile-time value types, use the generic facade:
+
+```go
+c, err := cache.NewTypedCache[string](config.WithCapacity(10_000, 32))
+if err != nil {
+	log.Fatal(err)
+}
+defer c.Close()
+
+if err := c.Set("user:42", "Ada"); err != nil {
+	log.Fatal(err)
+}
+user, ok := c.Get("user:42")
+```
+
 ## API
 
 ```go
 c, err := cache.NewCache(options...)
-err = c.Set(key, value)                  // configured default TTL
-err = c.Set(key, value, 30*time.Second) // explicit TTL
-err = c.Set(key, value, 0)              // no expiration
+err = c.Set(key, value)
+err = c.Set(key, value, 30*time.Second)
+err = c.Set(key, value, 0)
 value, ok := c.Get(key)
 deleted := c.Delete(key)
 size := c.Size()
@@ -73,7 +87,7 @@ A negative TTL or more than one TTL argument returns `cache.ErrInvalidTTL`. Writ
 
 All new keys enter a cold tier. Successful reads update a concurrency-safe Count-Min Sketch. A cold key becomes eligible for promotion after reaching the current frequency threshold and, when it has an expiration, retaining enough useful lifetime.
 
-The threshold is calculated from the estimated counts of resident keys instead of random sketch cells. A minimum-hit setting prevents the zero-threshold behavior that would otherwise promote every key. Sketch counters periodically decay so old traffic does not dominate forever.
+The threshold is calculated from the estimated counts of resident keys instead of random sketch cells. A minimum-hit setting prevents the zero-threshold behavior that would otherwise promote every key. Sketch counters use lazy generational decay, so aging is constant-time and old traffic does not dominate forever.
 
 Hot and cold maps are sharded. Tier transitions use a cache-level coordination lock so a completed operation cannot leave a key in both tiers or overwrite a newer concurrent mutation. Background workers sample cold entries for expiration and hot entries for demotion.
 
@@ -90,7 +104,7 @@ Configuration uses functional options. Invalid combinations are rejected before 
 | Option | Purpose | Default |
 | --- | --- | --- |
 | `WithDefaultTTL` | TTL used when `Set` omits a TTL | No expiration |
-| `WithShardCounts` | Hot and cold shard counts | 4, 4 |
+| `WithShardCounts` | Hot and cold shard counts | 16, 16 |
 | `WithCapacity` | Maximum entries and eviction sample size | 10,000, 32 |
 | `WithCMS` | Count-Min Sketch depth and width | 4, 50,000 |
 | `WithHotReadPercentage` | Target fraction used to calculate the hot threshold | 20% |
@@ -122,7 +136,7 @@ Counters are process-local and reset when a new cache is created. Keys are never
 
 ## Concurrency and lifecycle
 
-Public operations are safe for concurrent use. Cache-level coordination currently serializes mutations and tier transfers in favor of simple, testable correctness. Reads remain concurrent. Future performance work should preserve the tier-transition invariants and be justified with race tests and before-and-after benchmarks.
+Public operations are safe for concurrent use. Existing-key writes use shard-level coordination, while insertions, eviction, deletion, and tier transfers use cache-level coordination to preserve size and ownership invariants. Reads remain concurrent. Frequency updates use row-local lock striping instead of one sketch-wide write lock.
 
 The Count-Min Sketch is approximate. Deleting a key does not selectively clear its counters because doing so would corrupt counts shared through hash collisions; old counts disappear through periodic decay.
 
@@ -151,6 +165,8 @@ go test -run '^$' -bench . -benchmem ./cache
 
 CI runs formatting, vet, unit, and race checks on Linux, plus the unit suite on Windows. A repository policy test rejects comments in Go source; durable explanations belong in the README and the external agent guide.
 
+Detailed engineering decisions, test evidence, benchmark history, and the next-work queue live in the [godis agent guide](https://github.com/vuphan121/agent-files/blob/main/godis/AGENTS.md).
+
 ## Compatibility note
 
 The hardened constructor and mutation API differ from the earliest experimental version:
@@ -166,3 +182,4 @@ The project has not published a stable v1 API, so further compatibility changes 
 
 - [Low-level design](https://www.notion.so/Godis-low-level-design-30005c0ca4468048ac33fbcc5417f004?source=copy_link)
 - [Analysis of common caching systems](https://www.notion.so/Simple-analysis-of-common-caching-systems-30405c0ca4468042b295f064e33f6a46?source=copy_link)
+- [Release history](https://github.com/vuphan121/godis/releases)

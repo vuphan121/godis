@@ -25,7 +25,7 @@ func (c *Cache) startColdCleanup(cfg config.Config) {
 }
 
 func (c *Cache) cleanupCold(percentage float64, minSample, maxSample int) {
-	now := time.Now()
+	now := c.now()
 	c.tierMu.Lock()
 	defer c.tierMu.Unlock()
 	for _, shard := range c.coldShards {
