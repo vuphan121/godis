@@ -6,8 +6,12 @@ import (
 )
 
 func TestDefaultConfigIsValid(t *testing.T) {
-	if err := DefaultConfig().Validate(); err != nil {
+	cfg := DefaultConfig()
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config is invalid: %v", err)
+	}
+	if cfg.HotShardCount != 16 || cfg.ColdShardCount != 16 {
+		t.Fatalf("default shard counts = (%d, %d), want (16, 16)", cfg.HotShardCount, cfg.ColdShardCount)
 	}
 }
 

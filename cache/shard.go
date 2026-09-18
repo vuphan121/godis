@@ -93,3 +93,25 @@ func (s *cacheShard) sample(limit int) []sampledEntry {
 	}
 	return entries
 }
+
+func sampleShards(shards []*cacheShard, limit int) []sampledEntry {
+	if limit <= 0 {
+		return nil
+	}
+	entries := make([]sampledEntry, 0, limit)
+	seen := 0
+	for _, shard := range shards {
+		shard.mu.RLock()
+		for key, value := range shard.items {
+			candidate := sampledEntry{key: key, entry: value}
+			if seen < limit {
+				entries = append(entries, candidate)
+			} else if index := rand.Intn(seen + 1); index < limit {
+				entries[index] = candidate
+			}
+			seen++
+		}
+		shard.mu.RUnlock()
+	}
+	return entries
+}

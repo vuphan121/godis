@@ -118,28 +118,45 @@ func (c *Cache) Set(key string, value any, ttl ...time.Duration) error {
 		item.expiration = now.Add(duration)
 	}
 
+	c.tierMu.RLock()
+	if c.closed.Load() {
+		c.tierMu.RUnlock()
+		return ErrClosed
+	}
+	if c.replaceExisting(key, item) {
+		c.tierMu.RUnlock()
+		return nil
+	}
+	c.tierMu.RUnlock()
+
 	c.tierMu.Lock()
 	defer c.tierMu.Unlock()
 	if c.closed.Load() {
 		return ErrClosed
 	}
-	hot := c.hotShard(key)
-	if _, ok := hot.get(key); ok {
-		hot.set(key, item)
-		c.coldShard(key).delete(key)
-		return nil
-	}
-	cold := c.coldShard(key)
-	if _, ok := cold.get(key); ok {
-		cold.set(key, item)
+	if c.replaceExisting(key, item) {
 		return nil
 	}
 	if c.size >= c.maxEntries && !c.evictOneLocked(now) {
 		return ErrCapacity
 	}
-	cold.set(key, item)
+	c.coldShard(key).set(key, item)
 	c.size++
 	return nil
+}
+
+func (c *Cache) replaceExisting(key string, item *entry) bool {
+	hot := c.hotShard(key)
+	if _, ok := hot.get(key); ok {
+		hot.set(key, item)
+		return true
+	}
+	cold := c.coldShard(key)
+	if _, ok := cold.get(key); ok {
+		cold.set(key, item)
+		return true
+	}
+	return false
 }
 
 func (c *Cache) Get(key string) (any, bool) {
@@ -301,21 +318,18 @@ func (c *Cache) evictionCandidateLocked(shards []*cacheShard, now time.Time) (sa
 	if len(shards) == 0 {
 		return sampledEntry{}, false
 	}
-	perShard := (c.evictionSample + len(shards) - 1) / len(shards)
 	var chosen sampledEntry
 	chosenSet := false
 	chosenCount := uint(0)
-	for _, shard := range shards {
-		for _, candidate := range shard.sample(perShard) {
-			if candidate.entry.expired(now) {
-				return candidate, true
-			}
-			count := c.cms.Count(candidate.key)
-			if !chosenSet || count < chosenCount || (count == chosenCount && candidate.entry.createdAt.Before(chosen.entry.createdAt)) {
-				chosen = candidate
-				chosenCount = count
-				chosenSet = true
-			}
+	for _, candidate := range sampleShards(shards, c.evictionSample) {
+		if candidate.entry.expired(now) {
+			return candidate, true
+		}
+		count := c.cms.Count(candidate.key)
+		if !chosenSet || count < chosenCount || (count == chosenCount && candidate.entry.createdAt.Before(chosen.entry.createdAt)) {
+			chosen = candidate
+			chosenCount = count
+			chosenSet = true
 		}
 	}
 	return chosen, chosenSet

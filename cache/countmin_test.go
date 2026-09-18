@@ -34,3 +34,31 @@ func TestCountMinSketchRejectsInvalidDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestCountMinDecayUsesLazyGenerations(t *testing.T) {
+	sketch, err := NewCountMinSketch(2, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 8; index++ {
+		sketch.Add("key")
+	}
+	cellIndex := sketch.hash("key", 0) % uint(sketch.width)
+	before := sketch.table[0][cellIndex]
+	sketch.Decay()
+	if sketch.generation != 1 {
+		t.Fatalf("generation = %d, want 1", sketch.generation)
+	}
+	if sketch.table[0][cellIndex] != before {
+		t.Fatal("Decay eagerly changed a cell")
+	}
+	if count := sketch.Count("key"); count != 4 {
+		t.Fatalf("count after one generation = %d, want 4", count)
+	}
+	for index := 0; index < 64; index++ {
+		sketch.Decay()
+	}
+	if count := sketch.Count("key"); count != 0 {
+		t.Fatalf("count after aging = %d, want 0", count)
+	}
+}

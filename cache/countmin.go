@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"math/bits"
 	"sort"
 	"sync"
 )
@@ -12,10 +13,16 @@ import (
 const maxCMSCells = 10_000_000
 
 type CountMinSketch struct {
-	mu    sync.RWMutex
-	depth int
-	width int
-	table [][]uint
+	mu         sync.RWMutex
+	depth      int
+	width      int
+	generation uint64
+	table      [][]counterCell
+}
+
+type counterCell struct {
+	value      uint
+	generation uint64
 }
 
 func NewCountMinSketch(depth, width int) (*CountMinSketch, error) {
@@ -25,9 +32,9 @@ func NewCountMinSketch(depth, width int) (*CountMinSketch, error) {
 	if depth > maxCMSCells/width {
 		return nil, fmt.Errorf("Count-Min Sketch must not exceed %d counters", maxCMSCells)
 	}
-	table := make([][]uint, depth)
+	table := make([][]counterCell, depth)
 	for index := range table {
-		table[index] = make([]uint, width)
+		table[index] = make([]counterCell, width)
 	}
 	return &CountMinSketch{depth: depth, width: width, table: table}, nil
 }
@@ -37,8 +44,11 @@ func (cms *CountMinSketch) Add(key string) {
 	defer cms.mu.Unlock()
 	for row := 0; row < cms.depth; row++ {
 		index := cms.hash(key, uint(row)) % uint(cms.width)
-		if cms.table[row][index] < ^uint(0) {
-			cms.table[row][index]++
+		cell := &cms.table[row][index]
+		cell.value = agedValue(*cell, cms.generation)
+		cell.generation = cms.generation
+		if cell.value < ^uint(0) {
+			cell.value++
 		}
 	}
 }
@@ -52,11 +62,18 @@ func (cms *CountMinSketch) Count(key string) uint {
 func (cms *CountMinSketch) Decay() {
 	cms.mu.Lock()
 	defer cms.mu.Unlock()
+	if cms.generation != ^uint64(0) {
+		cms.generation++
+		return
+	}
 	for row := range cms.table {
 		for column := range cms.table[row] {
-			cms.table[row][column] /= 2
+			cell := &cms.table[row][column]
+			cell.value = agedValue(*cell, cms.generation)
+			cell.generation = 0
 		}
 	}
+	cms.generation = 1
 }
 
 func (cms *CountMinSketch) TopThreshold(keys []string, fraction float64, minHits uint) uint {
@@ -88,11 +105,22 @@ func (cms *CountMinSketch) countLocked(key string) uint {
 	minimum := ^uint(0)
 	for row := 0; row < cms.depth; row++ {
 		index := cms.hash(key, uint(row)) % uint(cms.width)
-		if value := cms.table[row][index]; value < minimum {
+		if value := agedValue(cms.table[row][index], cms.generation); value < minimum {
 			minimum = value
 		}
 	}
 	return minimum
+}
+
+func agedValue(cell counterCell, generation uint64) uint {
+	if generation <= cell.generation {
+		return cell.value
+	}
+	age := generation - cell.generation
+	if age >= uint64(bits.UintSize) {
+		return 0
+	}
+	return cell.value >> age
 }
 
 func (cms *CountMinSketch) hash(key string, seed uint) uint {

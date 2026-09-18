@@ -38,8 +38,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		DefaultTTL:           0,
-		HotShardCount:        4,
-		ColdShardCount:       4,
+		HotShardCount:        16,
+		ColdShardCount:       16,
 		HotReadPercentage:    0.20,
 		HotThresholdTTL:      2 * time.Second,
 		HotMinHits:           2,
