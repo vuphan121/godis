@@ -2,167 +2,334 @@ package cache
 
 import (
 	"context"
-	cfgpkg "github.com/vuphan121/godis/config"
+	"errors"
 	"hash/fnv"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/vuphan121/godis/config"
 )
 
+var (
+	// ErrClosed is returned when a write is attempted after Close.
+	ErrClosed = errors.New("cache is closed")
+	// ErrInvalidTTL is returned for a negative TTL or more than one TTL value.
+	ErrInvalidTTL = errors.New("TTL must be non-negative and specified at most once")
+	// ErrCapacity is returned when the cache cannot free room for a new key.
+	ErrCapacity = errors.New("cache is at capacity")
+)
+
+// Cache is a bounded, sharded, two-tier in-memory cache.
 type Cache struct {
-	HotShards  []*CacheShard
-	ColdShards []*CacheShard
+	hotShards  []*cacheShard
+	coldShards []*cacheShard
 
 	hotShardCount  int
 	coldShardCount int
 	defaultTTL     time.Duration
+	maxEntries     int
+	evictionSample int
 
 	cms               *CountMinSketch
 	hotReadPercentage float64
+	minHotTTL         time.Duration
+	hotMinHits        uint
+	hotThreshold      atomic.Uint64
 
-	hotThreshold        uint
-	hotThresholdUpdated time.Time
-	hotThresholdTTL     time.Duration
+	tierMu sync.RWMutex
+	size   int
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx       context.Context
+	cancel    context.CancelFunc
+	workers   sync.WaitGroup
+	closeOnce sync.Once
+	closed    atomic.Bool
+	done      chan struct{}
+
+	metrics cacheMetrics
 }
 
-func NewCache(opts ...cfgpkg.Option) *Cache {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cfg := cfgpkg.DefaultConfig()
-
-	for _, opt := range opts {
-		opt(&cfg)
+// NewCache validates options, allocates the cache, and starts maintenance workers.
+func NewCache(options ...config.Option) (*Cache, error) {
+	cfg := config.DefaultConfig()
+	for _, option := range options {
+		if option == nil {
+			return nil, errors.New("cache option must not be nil")
+		}
+		option(&cfg)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 
+	cms, err := NewCountMinSketch(cfg.CMSDepth, cfg.CMSWidth)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Cache{
-		HotShards:         make([]*CacheShard, cfg.HotShardCount),
-		ColdShards:        make([]*CacheShard, cfg.ColdShardCount),
+		hotShards:         make([]*cacheShard, cfg.HotShardCount),
+		coldShards:        make([]*cacheShard, cfg.ColdShardCount),
 		hotShardCount:     cfg.HotShardCount,
 		coldShardCount:    cfg.ColdShardCount,
 		defaultTTL:        cfg.DefaultTTL,
-		cms:               NewCountMinSketch(cfg.CMSDepth, cfg.CMSWidth),
+		maxEntries:        cfg.MaxEntries,
+		evictionSample:    cfg.EvictionSampleSize,
+		cms:               cms,
 		hotReadPercentage: cfg.HotReadPercentage,
-		hotThresholdTTL:   cfg.HotThresholdTTL,
+		minHotTTL:         cfg.HotThresholdTTL,
+		hotMinHits:        cfg.HotMinHits,
 		ctx:               ctx,
 		cancel:            cancel,
+		done:              make(chan struct{}),
+	}
+	c.hotThreshold.Store(uint64(cfg.HotMinHits))
+	for index := range c.hotShards {
+		c.hotShards[index] = newCacheShard()
+	}
+	for index := range c.coldShards {
+		c.coldShards[index] = newCacheShard()
 	}
 
-	for i := 0; i < cfg.HotShardCount; i++ {
-		c.HotShards[i] = NewCacheShard()
-	}
-	for i := 0; i < cfg.ColdShardCount; i++ {
-		c.ColdShards[i] = NewCacheShard()
-	}
-
-	StartColdCacheCleanup(
-		c,
-		cfg.ColdCleanupInterval,
-		cfg.ColdCleanupPercent,
-		cfg.ColdCleanupMinSample,
-	)
-
-	StartHotDemotion(
-		c,
-		cfg.HotDemotionInterval,
-		cfg.HotDemotionPercent,
-		cfg.HotDemotionMinSample,
-		cfg.HotDemotionMaxSample,
-	)
-
-	return c
+	c.startColdCleanup(cfg)
+	c.startHotDemotion(cfg)
+	return c, nil
 }
 
 func getShardIndex(key string, shardCount int) int {
-	h := fnv.New32a()
-	if _, err := h.Write([]byte(key)); err != nil {
-		return 0
-	}
-	return int(h.Sum32()) % shardCount
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(key))
+	return int(hash.Sum32() % uint32(shardCount))
 }
 
-func (c *Cache) Set(key string, value interface{}, ttl ...time.Duration) {
-	var expiration time.Time
-	if len(ttl) > 0 && ttl[0] > 0 {
-		expiration = time.Now().Add(ttl[0])
-	} else if c.defaultTTL > 0 {
-		expiration = time.Now().Add(c.defaultTTL)
+// Set stores a value. An omitted TTL uses the configured default, zero disables
+// expiration for this value, and a negative TTL is rejected.
+func (c *Cache) Set(key string, value any, ttl ...time.Duration) error {
+	if c.closed.Load() {
+		return ErrClosed
+	}
+	if len(ttl) > 1 {
+		return ErrInvalidTTL
+	}
+	duration := c.defaultTTL
+	if len(ttl) == 1 {
+		duration = ttl[0]
+	}
+	if duration < 0 {
+		return ErrInvalidTTL
+	}
+	now := time.Now()
+	item := &entry{value: value, createdAt: now}
+	if duration > 0 {
+		item.expiration = now.Add(duration)
 	}
 
-	entry := &Entry{
-		Value:      value,
-		Expiration: expiration,
+	c.tierMu.Lock()
+	defer c.tierMu.Unlock()
+	if c.closed.Load() {
+		return ErrClosed
+	}
+	hot := c.hotShard(key)
+	if _, ok := hot.get(key); ok {
+		hot.set(key, item)
+		c.coldShard(key).delete(key)
+		return nil
+	}
+	cold := c.coldShard(key)
+	if _, ok := cold.get(key); ok {
+		cold.set(key, item)
+		return nil
+	}
+	if c.size >= c.maxEntries && !c.evictOneLocked(now) {
+		return ErrCapacity
+	}
+	cold.set(key, item)
+	c.size++
+	return nil
+}
+
+// Get retrieves an unexpired value and records a hit or miss.
+func (c *Cache) Get(key string) (any, bool) {
+	if c.closed.Load() {
+		return nil, false
+	}
+	now := time.Now()
+	c.tierMu.RLock()
+	if item, ok := c.hotShard(key).get(key); ok {
+		if item.expired(now) {
+			c.tierMu.RUnlock()
+			c.removeExpired(key, item, true)
+			c.metrics.misses.Add(1)
+			return nil, false
+		}
+		value := item.value
+		c.cms.Add(key)
+		c.tierMu.RUnlock()
+		c.metrics.hits.Add(1)
+		return value, true
 	}
 
-	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
-	if _, ok := hotShard.Get(key); ok {
-		hotShard.Set(key, entry)
+	item, ok := c.coldShard(key).get(key)
+	if !ok {
+		c.tierMu.RUnlock()
+		c.metrics.misses.Add(1)
+		return nil, false
+	}
+	if item.expired(now) {
+		c.tierMu.RUnlock()
+		c.removeExpired(key, item, false)
+		c.metrics.misses.Add(1)
+		return nil, false
+	}
+	value := item.value
+	c.cms.Add(key)
+	shouldPromote := item.hotEligible(now, c.minHotTTL) && c.IsHotKey(key)
+	c.tierMu.RUnlock()
+	c.metrics.hits.Add(1)
+	if shouldPromote {
+		c.promote(key, item, now)
+	}
+	return value, true
+}
+
+// Delete removes a key and reports whether it existed.
+func (c *Cache) Delete(key string) bool {
+	if c.closed.Load() {
+		return false
+	}
+	c.tierMu.Lock()
+	defer c.tierMu.Unlock()
+	removedHot := c.hotShard(key).delete(key)
+	removedCold := c.coldShard(key).delete(key)
+	if removedHot || removedCold {
+		c.size--
+		return true
+	}
+	return false
+}
+
+// IsHotKey reports whether the approximate access count reaches the current threshold.
+func (c *Cache) IsHotKey(key string) bool {
+	return uint64(c.cms.Count(key)) >= c.hotThreshold.Load()
+}
+
+// Size returns the number of resident entries across both tiers.
+func (c *Cache) Size() int {
+	c.tierMu.RLock()
+	defer c.tierMu.RUnlock()
+	return c.size
+}
+
+// Stats returns a point-in-time metrics snapshot.
+func (c *Cache) Stats() Stats {
+	return Stats{
+		Size:        c.Size(),
+		Hits:        c.metrics.hits.Load(),
+		Misses:      c.metrics.misses.Load(),
+		Promotions:  c.metrics.promotions.Load(),
+		Demotions:   c.metrics.demotions.Load(),
+		Evictions:   c.metrics.evictions.Load(),
+		Expirations: c.metrics.expirations.Load(),
+	}
+}
+
+// Close stops all maintenance workers. It is safe to call more than once.
+func (c *Cache) Close() {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		c.cancel()
+		c.workers.Wait()
+		close(c.done)
+	})
+	<-c.done
+}
+
+func (c *Cache) hotShard(key string) *cacheShard {
+	return c.hotShards[getShardIndex(key, c.hotShardCount)]
+}
+
+func (c *Cache) coldShard(key string) *cacheShard {
+	return c.coldShards[getShardIndex(key, c.coldShardCount)]
+}
+
+func (c *Cache) promote(key string, expected *entry, now time.Time) {
+	c.tierMu.Lock()
+	defer c.tierMu.Unlock()
+	if c.closed.Load() {
 		return
 	}
-
-	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
-	coldShard.Set(key, entry)
-}
-
-func (c *Cache) Get(key string) (interface{}, bool) {
-	c.cms.Add(key)
-
-	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
-	if entry, ok := hotShard.Get(key); ok {
-		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
-			hotShard.Delete(key)
-			c.cms.Reset(key)
-			return nil, false
-		}
-
-		return entry.Value, true
+	cold := c.coldShard(key)
+	current, ok := cold.get(key)
+	if !ok || current != expected || current.expired(now) || !current.hotEligible(now, c.minHotTTL) || !c.IsHotKey(key) {
+		return
 	}
-
-	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
-	if entry, ok := coldShard.Get(key); ok {
-		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
-			coldShard.Delete(key)
-			c.cms.Reset(key)
-			return nil, false
-		}
-
-		if c.IsHotKey(key) {
-			c.promoteColdKey(key, entry)
-		}
-
-		return entry.Value, true
+	if !cold.deleteIf(key, current) {
+		return
 	}
-
-	return nil, false
+	c.hotShard(key).set(key, current)
+	c.metrics.promotions.Add(1)
 }
 
-func (c *Cache) Delete(key string) {
-	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
-	hotShard.Delete(key)
-
-	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
-	coldShard.Delete(key)
-
-	c.cms.Reset(key)
+func (c *Cache) removeExpired(key string, expected *entry, hot bool) {
+	c.tierMu.Lock()
+	defer c.tierMu.Unlock()
+	shard := c.coldShard(key)
+	if hot {
+		shard = c.hotShard(key)
+	}
+	if shard.deleteIf(key, expected) {
+		c.size--
+		c.metrics.expirations.Add(1)
+	}
 }
 
-func (c *Cache) IsHotKey(key string) bool {
-	count := c.cms.Count(key)
-	return count >= c.hotThreshold
+func (c *Cache) evictOneLocked(now time.Time) bool {
+	candidate, ok := c.evictionCandidateLocked(c.coldShards, now)
+	hot := false
+	if !ok {
+		candidate, ok = c.evictionCandidateLocked(c.hotShards, now)
+		hot = true
+	}
+	if !ok {
+		return false
+	}
+	shard := c.coldShard(candidate.key)
+	if hot {
+		shard = c.hotShard(candidate.key)
+	}
+	if !shard.deleteIf(candidate.key, candidate.entry) {
+		return false
+	}
+	c.size--
+	if candidate.entry.expired(now) {
+		c.metrics.expirations.Add(1)
+	} else {
+		c.metrics.evictions.Add(1)
+	}
+	return true
 }
 
-func (c *Cache) promoteColdKey(key string, entry *Entry) {
-	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
-	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
-
-	hotShard.Set(key, entry)
-	coldShard.Delete(key)
-}
-
-func (c *Cache) demoteHotKey(key string, entry *Entry) {
-	hotShard := c.HotShards[getShardIndex(key, c.hotShardCount)]
-	coldShard := c.ColdShards[getShardIndex(key, c.coldShardCount)]
-
-	coldShard.Set(key, entry)
-	hotShard.Delete(key)
+func (c *Cache) evictionCandidateLocked(shards []*cacheShard, now time.Time) (sampledEntry, bool) {
+	if len(shards) == 0 {
+		return sampledEntry{}, false
+	}
+	perShard := (c.evictionSample + len(shards) - 1) / len(shards)
+	var chosen sampledEntry
+	chosenSet := false
+	chosenCount := uint(0)
+	for _, shard := range shards {
+		for _, candidate := range shard.sample(perShard) {
+			if candidate.entry.expired(now) {
+				return candidate, true
+			}
+			count := c.cms.Count(candidate.key)
+			if !chosenSet || count < chosenCount || (count == chosenCount && candidate.entry.createdAt.Before(chosen.entry.createdAt)) {
+				chosen = candidate
+				chosenCount = count
+				chosenSet = true
+			}
+		}
+	}
+	return chosen, chosenSet
 }

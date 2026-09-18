@@ -1,96 +1,66 @@
 package cache
 
 import (
-	"math/rand"
 	"time"
+
+	"github.com/vuphan121/godis/config"
 )
 
-func StartHotDemotion(c *Cache, interval time.Duration, samplePercent float64, minSample int, maxSample int) {
+func (c *Cache) startHotDemotion(cfg config.Config) {
+	c.workers.Add(1)
 	go func() {
-		ticker := time.NewTicker(interval)
+		defer c.workers.Done()
+		ticker := time.NewTicker(cfg.HotDemotionInterval)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-c.ctx.Done():
 				return
-
 			case <-ticker.C:
-				totalKeys := 1
-				for _, shard := range c.HotShards {
-					shard.lock.RLock()
-					totalKeys += shard.keyCount
-					shard.lock.RUnlock()
-				}
-				if totalKeys == 0 {
-					totalKeys = 1
-				}
-
-				c.hotThreshold = c.cms.ApproxTopThreshold(c.hotReadPercentage, totalKeys)
-				c.hotThresholdUpdated = time.Now()
-				threshold := c.hotThreshold
-
-				for _, shard := range c.HotShards {
-					sampleSize := int(float64(shard.keyCount) * samplePercent)
-					if sampleSize < minSample {
-						sampleSize = minSample
-					}
-					if sampleSize > maxSample {
-						sampleSize = maxSample
-					}
-
-					keys := shard.SampleKeysUnique(sampleSize)
-
-					shard.lock.Lock()
-					for _, key := range keys {
-						entry, ok := shard.items[key]
-						if !ok {
-							continue
-						}
-
-						count := c.cms.Count(key)
-
-						isCold := count < threshold
-						isExpired := !entry.Expiration.IsZero() && time.Now().After(entry.Expiration)
-
-						if isCold || isExpired {
-							c.demoteHotKey(key, entry)
-						}
-					}
-					shard.lock.Unlock()
-				}
+				c.maintainHot(cfg.HotDemotionPercent, cfg.HotDemotionMinSample, cfg.HotDemotionMaxSample)
 			}
 		}
 	}()
 }
 
-//TODO: reuse reservoir slice
+func (c *Cache) maintainHot(percentage float64, minSample, maxSample int) {
+	now := time.Now()
+	c.tierMu.Lock()
+	defer c.tierMu.Unlock()
 
-func (s *CacheShard) SampleKeysUnique(n int) []string {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
+	c.cms.Decay()
+	threshold := c.cms.TopThreshold(c.residentKeysLocked(), c.hotReadPercentage, c.hotMinHits)
+	c.hotThreshold.Store(uint64(threshold))
 
-	if n >= s.keyCount {
-		keys := make([]string, 0, s.keyCount)
-		for k := range s.items {
-			keys = append(keys, k)
-		}
-		return keys
-	}
-
-	reservoir := make([]string, 0, n)
-	i := 0
-	for k := range s.items {
-		if i < n {
-			reservoir = append(reservoir, k)
-		} else {
-			r := rand.Intn(i + 1)
-			if r < n {
-				reservoir[r] = k
+	for _, shard := range c.hotShards {
+		limit := maintenanceSampleSize(shard.len(), percentage, minSample, maxSample)
+		for _, candidate := range shard.sample(limit) {
+			if candidate.entry.expired(now) {
+				if shard.deleteIf(candidate.key, candidate.entry) {
+					c.size--
+					c.metrics.expirations.Add(1)
+				}
+				continue
 			}
+			if c.cms.Count(candidate.key) >= threshold && candidate.entry.hotEligible(now, c.minHotTTL) {
+				continue
+			}
+			if !shard.deleteIf(candidate.key, candidate.entry) {
+				continue
+			}
+			c.coldShard(candidate.key).set(candidate.key, candidate.entry)
+			c.metrics.demotions.Add(1)
 		}
-		i++
 	}
+}
 
-	return reservoir
+func (c *Cache) residentKeysLocked() []string {
+	keys := make([]string, 0, c.size)
+	for _, shard := range c.hotShards {
+		keys = append(keys, shard.keys()...)
+	}
+	for _, shard := range c.coldShards {
+		keys = append(keys, shard.keys()...)
+	}
+	return keys
 }

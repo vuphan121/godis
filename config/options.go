@@ -2,12 +2,11 @@ package config
 
 import "time"
 
+// Option changes one part of a Config. NewCache validates the result.
 type Option func(*Config)
 
 func WithDefaultTTL(ttl time.Duration) Option {
-	return func(cfg *Config) {
-		cfg.DefaultTTL = ttl
-	}
+	return func(cfg *Config) { cfg.DefaultTTL = ttl }
 }
 
 func WithShardCounts(hot, cold int) Option {
@@ -17,16 +16,16 @@ func WithShardCounts(hot, cold int) Option {
 	}
 }
 
-func WithHotReadPercentage(p float64) Option {
-	return func(cfg *Config) {
-		cfg.HotReadPercentage = p
-	}
+func WithHotReadPercentage(percentage float64) Option {
+	return func(cfg *Config) { cfg.HotReadPercentage = percentage }
 }
 
 func WithHotThresholdTTL(ttl time.Duration) Option {
-	return func(cfg *Config) {
-		cfg.HotThresholdTTL = ttl
-	}
+	return func(cfg *Config) { cfg.HotThresholdTTL = ttl }
+}
+
+func WithHotMinHits(hits uint) Option {
+	return func(cfg *Config) { cfg.HotMinHits = hits }
 }
 
 func WithCMS(depth, width int) Option {
@@ -36,18 +35,29 @@ func WithCMS(depth, width int) Option {
 	}
 }
 
-func WithColdCleanup(interval time.Duration, percent float64, minSample int) Option {
+func WithCapacity(maxEntries, evictionSampleSize int) Option {
+	return func(cfg *Config) {
+		cfg.MaxEntries = maxEntries
+		cfg.EvictionSampleSize = evictionSampleSize
+	}
+}
+
+func WithColdCleanup(interval time.Duration, percentage float64, minSample int) Option {
 	return func(cfg *Config) {
 		cfg.ColdCleanupInterval = interval
-		cfg.ColdCleanupPercent = percent
+		cfg.ColdCleanupPercent = percentage
 		cfg.ColdCleanupMinSample = minSample
 	}
 }
 
-func WithHotDemotion(interval time.Duration, percent float64, minSample, maxSample int) Option {
+func WithColdCleanupMaxSample(maxSample int) Option {
+	return func(cfg *Config) { cfg.ColdCleanupMaxSample = maxSample }
+}
+
+func WithHotDemotion(interval time.Duration, percentage float64, minSample, maxSample int) Option {
 	return func(cfg *Config) {
 		cfg.HotDemotionInterval = interval
-		cfg.HotDemotionPercent = percent
+		cfg.HotDemotionPercent = percentage
 		cfg.HotDemotionMinSample = minSample
 		cfg.HotDemotionMaxSample = maxSample
 	}
