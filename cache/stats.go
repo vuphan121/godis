@@ -2,7 +2,6 @@ package cache
 
 import "sync/atomic"
 
-// Stats is a point-in-time snapshot of cache activity.
 type Stats struct {
 	Size        int
 	Hits        uint64

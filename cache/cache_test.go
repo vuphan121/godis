@@ -204,6 +204,7 @@ func TestConcurrentAccessStaysBounded(t *testing.T) {
 		}()
 	}
 	wait.Wait()
+	assertCacheInvariants(t, cache)
 	if size := cache.Size(); size < 0 || size > 50 {
 		t.Fatalf("size = %d, want [0, 50]", size)
 	}

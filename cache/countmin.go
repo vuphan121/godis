@@ -11,7 +11,6 @@ import (
 
 const maxCMSCells = 10_000_000
 
-// CountMinSketch is a concurrency-safe approximate frequency counter.
 type CountMinSketch struct {
 	mu    sync.RWMutex
 	depth int
@@ -19,7 +18,6 @@ type CountMinSketch struct {
 	table [][]uint
 }
 
-// NewCountMinSketch creates a sketch with validated positive dimensions.
 func NewCountMinSketch(depth, width int) (*CountMinSketch, error) {
 	if depth <= 0 || width <= 0 {
 		return nil, fmt.Errorf("Count-Min Sketch dimensions must be positive")
@@ -34,7 +32,6 @@ func NewCountMinSketch(depth, width int) (*CountMinSketch, error) {
 	return &CountMinSketch{depth: depth, width: width, table: table}, nil
 }
 
-// Add records one access without allowing a counter to wrap around.
 func (cms *CountMinSketch) Add(key string) {
 	cms.mu.Lock()
 	defer cms.mu.Unlock()
@@ -46,14 +43,12 @@ func (cms *CountMinSketch) Add(key string) {
 	}
 }
 
-// Count returns the approximate access count for key.
 func (cms *CountMinSketch) Count(key string) uint {
 	cms.mu.RLock()
 	defer cms.mu.RUnlock()
 	return cms.countLocked(key)
 }
 
-// Decay halves all counters so old traffic does not dominate forever.
 func (cms *CountMinSketch) Decay() {
 	cms.mu.Lock()
 	defer cms.mu.Unlock()
@@ -64,8 +59,6 @@ func (cms *CountMinSketch) Decay() {
 	}
 }
 
-// TopThreshold returns the minimum count in the requested hottest fraction of
-// actual resident keys, bounded by minHits.
 func (cms *CountMinSketch) TopThreshold(keys []string, fraction float64, minHits uint) uint {
 	if len(keys) == 0 {
 		return minHits

@@ -2,7 +2,6 @@ package config
 
 import "time"
 
-// Option changes one part of a Config. NewCache validates the result.
 type Option func(*Config)
 
 func WithDefaultTTL(ttl time.Duration) Option {

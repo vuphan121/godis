@@ -12,15 +12,11 @@ import (
 )
 
 var (
-	// ErrClosed is returned when a write is attempted after Close.
-	ErrClosed = errors.New("cache is closed")
-	// ErrInvalidTTL is returned for a negative TTL or more than one TTL value.
+	ErrClosed     = errors.New("cache is closed")
 	ErrInvalidTTL = errors.New("TTL must be non-negative and specified at most once")
-	// ErrCapacity is returned when the cache cannot free room for a new key.
-	ErrCapacity = errors.New("cache is at capacity")
+	ErrCapacity   = errors.New("cache is at capacity")
 )
 
-// Cache is a bounded, sharded, two-tier in-memory cache.
 type Cache struct {
 	hotShards  []*cacheShard
 	coldShards []*cacheShard
@@ -50,7 +46,6 @@ type Cache struct {
 	metrics cacheMetrics
 }
 
-// NewCache validates options, allocates the cache, and starts maintenance workers.
 func NewCache(options ...config.Option) (*Cache, error) {
 	cfg := config.DefaultConfig()
 	for _, option := range options {
@@ -103,8 +98,6 @@ func getShardIndex(key string, shardCount int) int {
 	return int(hash.Sum32() % uint32(shardCount))
 }
 
-// Set stores a value. An omitted TTL uses the configured default, zero disables
-// expiration for this value, and a negative TTL is rejected.
 func (c *Cache) Set(key string, value any, ttl ...time.Duration) error {
 	if c.closed.Load() {
 		return ErrClosed
@@ -149,7 +142,6 @@ func (c *Cache) Set(key string, value any, ttl ...time.Duration) error {
 	return nil
 }
 
-// Get retrieves an unexpired value and records a hit or miss.
 func (c *Cache) Get(key string) (any, bool) {
 	if c.closed.Load() {
 		return nil, false
@@ -193,7 +185,6 @@ func (c *Cache) Get(key string) (any, bool) {
 	return value, true
 }
 
-// Delete removes a key and reports whether it existed.
 func (c *Cache) Delete(key string) bool {
 	if c.closed.Load() {
 		return false
@@ -209,19 +200,16 @@ func (c *Cache) Delete(key string) bool {
 	return false
 }
 
-// IsHotKey reports whether the approximate access count reaches the current threshold.
 func (c *Cache) IsHotKey(key string) bool {
 	return uint64(c.cms.Count(key)) >= c.hotThreshold.Load()
 }
 
-// Size returns the number of resident entries across both tiers.
 func (c *Cache) Size() int {
 	c.tierMu.RLock()
 	defer c.tierMu.RUnlock()
 	return c.size
 }
 
-// Stats returns a point-in-time metrics snapshot.
 func (c *Cache) Stats() Stats {
 	return Stats{
 		Size:        c.Size(),
@@ -234,7 +222,6 @@ func (c *Cache) Stats() Stats {
 	}
 }
 
-// Close stops all maintenance workers. It is safe to call more than once.
 func (c *Cache) Close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)

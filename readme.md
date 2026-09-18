@@ -1,5 +1,7 @@
 # godis
 
+[![CI](https://github.com/vuphan121/godis/actions/workflows/ci.yml/badge.svg)](https://github.com/vuphan121/godis/actions/workflows/ci.yml)
+
 `godis` is an experimental, bounded in-memory cache library for Go. It explores sharding, hot/cold tiering, approximate frequency tracking, TTL expiration, sampled eviction, and background maintenance.
 
 The project is suitable for learning and experimentation. It has automated correctness and race tests, but it has not yet been proven under production workloads.
@@ -129,10 +131,16 @@ The Count-Min Sketch is approximate. Deleting a key does not selectively clear i
 Run the full verification suite:
 
 ```bash
-gofmt -w cache config
+gofmt -w .
 go vet ./...
 go test ./...
 go test -race ./...
+```
+
+Run the sequential operation fuzzer:
+
+```bash
+go test -run '^$' -fuzz '^FuzzSequentialModel$' -fuzztime=30s ./cache
 ```
 
 Run benchmarks:
@@ -140,6 +148,8 @@ Run benchmarks:
 ```bash
 go test -run '^$' -bench . -benchmem ./cache
 ```
+
+CI runs formatting, vet, unit, and race checks on Linux, plus the unit suite on Windows. A repository policy test rejects comments in Go source; durable explanations belong in the README and the external agent guide.
 
 ## Compatibility note
 

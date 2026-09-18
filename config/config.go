@@ -10,7 +10,6 @@ const (
 	maxCMSCells    = 10_000_000
 )
 
-// Config controls cache capacity, tiering, frequency estimation, and maintenance.
 type Config struct {
 	DefaultTTL        time.Duration
 	HotShardCount     int
@@ -36,7 +35,6 @@ type Config struct {
 	HotDemotionMaxSample int
 }
 
-// DefaultConfig returns conservative defaults suitable for local use.
 func DefaultConfig() Config {
 	return Config{
 		DefaultTTL:           0,
@@ -60,8 +58,6 @@ func DefaultConfig() Config {
 	}
 }
 
-// Validate rejects settings that would panic, allocate unreasonable samples,
-// or produce undefined cache behavior.
 func (c Config) Validate() error {
 	if c.DefaultTTL < 0 {
 		return fmt.Errorf("default TTL must be non-negative")
