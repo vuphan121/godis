@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/vuphan121/godis/actions/workflows/ci.yml/badge.svg)](https://github.com/vuphan121/godis/actions/workflows/ci.yml)
 
-`godis` is an experimental, bounded in-memory cache library for Go. It combines sharded hot/cold tiers, approximate frequency tracking, TTL expiration, sampled eviction, and background maintenance behind concurrent untyped and generic APIs.
+`godis` is a bounded, concurrent in-memory cache for Go with TTL expiration, hot/cold tiers, and sampled LFU-style eviction.
 
-The project is suitable for learning and experimentation. It has automated correctness and race tests, but it has not yet been proven under production workloads.
+It is experimental and has not yet been proven under production workloads.
 
 ## Requirements
 
@@ -140,6 +140,25 @@ Public operations are safe for concurrent use. Existing-key writes use shard-lev
 
 The Count-Min Sketch is approximate. Deleting a key does not selectively clear its counters because doing so would corrupt counts shared through hash collisions; old counts disappear through periodic decay.
 
+## Performance
+
+These local benchmarks were collected on Windows/amd64 with an AMD Ryzen 7 7735HS. They are regression baselines, not cross-machine performance guarantees.
+
+Striping frequency-counter updates reduced mean parallel update latency from 298 ns/op to 111 ns/op, about 2.7× faster in this workload. Both versions reported zero allocations per operation. Whiskers show the minimum and maximum across five runs.
+
+![Parallel Count-Min Sketch update latency](docs/benchmarks/count-min-parallel-add.svg)
+
+Existing-key writes scale as lock contention is distributed across more shards. The default is 16 hot and 16 cold shards.
+
+![Existing-key parallel write latency by shard count](docs/benchmarks/parallel-write-sharding.svg)
+
+Reproduce the measurements with:
+
+```bash
+go test ./cache -run '^$' -bench '^BenchmarkCountMinParallelAdd$' -benchmem -count 5
+go test ./cache -run '^$' -bench '^BenchmarkCacheParallelWrites$' -benchmem -count 3
+```
+
 ## Development
 
 Run the full verification suite:
@@ -163,9 +182,7 @@ Run benchmarks:
 go test -run '^$' -bench . -benchmem ./cache
 ```
 
-CI runs formatting, vet, unit, and race checks on Linux, plus the unit suite on Windows. A repository policy test rejects comments in Go source; durable explanations belong in the README and the external agent guide.
-
-Detailed engineering decisions, test evidence, benchmark history, and the next-work queue live in the [godis agent guide](https://github.com/vuphan121/agent-files/blob/main/godis/AGENTS.md).
+CI runs formatting, vet, unit, and race checks on Linux, plus the unit suite on Windows. A repository policy test rejects comments in Go source; durable explanations belong in the README and changelog.
 
 ## Compatibility note
 

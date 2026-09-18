@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" role="img" aria-labelledby="title description">
+  <title id="title">Existing-key parallel write latency by shard count</title>
+  <desc id="description">Average latency falls from 601 nanoseconds with one shard to 228 with four, 80 with sixteen, and 55 with sixty-four shards.</desc>
+  <rect width="960" height="470" fill="#ffffff"/>
+  <text x="48" y="46" fill="#111827" font-family="Arial, sans-serif" font-size="24" font-weight="600">Existing-key parallel writes</text>
+  <text x="48" y="74" fill="#4b5563" font-family="Arial, sans-serif" font-size="14">Lower is better · mean of three runs · 16 logical CPUs</text>
+  <g stroke="#e5e7eb" stroke-width="1">
+    <line x1="112" y1="368" x2="912" y2="368"/>
+    <line x1="112" y1="302" x2="912" y2="302"/>
+    <line x1="112" y1="236" x2="912" y2="236"/>
+    <line x1="112" y1="170" x2="912" y2="170"/>
+    <line x1="112" y1="104" x2="912" y2="104"/>
+  </g>
+  <g fill="#4b5563" font-family="Arial, sans-serif" font-size="13" text-anchor="end">
+    <text x="98" y="373">0</text>
+    <text x="98" y="307">150</text>
+    <text x="98" y="241">300</text>
+    <text x="98" y="175">450</text>
+    <text x="98" y="109">600</text>
+  </g>
+  <text x="24" y="244" fill="#4b5563" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" transform="rotate(-90 24 244)">Latency (ns/op)</text>
+  <g fill="#2563eb">
+    <rect x="166" y="104" width="120" height="264" rx="4"/>
+    <rect x="358" y="268" width="120" height="100" rx="4"/>
+    <rect x="550" y="333" width="120" height="35" rx="4"/>
+    <rect x="742" y="344" width="120" height="24" rx="4"/>
+  </g>
+  <g fill="#111827" font-family="Arial, sans-serif" font-size="15" font-weight="600" text-anchor="middle">
+    <text x="226" y="94">601</text>
+    <text x="418" y="258">228</text>
+    <text x="610" y="323">80</text>
+    <text x="802" y="334">55</text>
+  </g>
+  <g fill="#111827" font-family="Arial, sans-serif" font-size="14" text-anchor="middle">
+    <text x="226" y="398">1 shard</text>
+    <text x="418" y="398">4 shards</text>
+    <text x="610" y="398">16 shards</text>
+    <text x="802" y="398">64 shards</text>
+    <text x="514" y="430" fill="#4b5563">Hot and cold shard count</text>
+  </g>
+  <text x="48" y="458" fill="#6b7280" font-family="Arial, sans-serif" font-size="12">AMD Ryzen 7 7735HS · Windows/amd64 · 79 B/op · 2 allocations/op</text>
+</svg>
